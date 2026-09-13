@@ -1,52 +1,273 @@
-#!/bin/bash
+import os
+import re
+import json
+import time
+from google import genai
+from google.genai import types
+from mutagen.easyid3 import EasyID3
+from mutagen.mp3 import MP3
 
-# ==============================================================================
-# Script de Download de Playlists do YouTube (Áudio MP3 - Alta Qualidade)
-# ==============================================================================
+# ==========================================
+# CONFIGURAÇÕES
+# ==========================================
+TAMANHO_LOTE = 25  # Quantidade de músicas enviadas por lote para a API
+EXTENSOES_SUPORTADAS = ('.mp3', '.MP3')
+HISTORICO_FILE = "historico_processados.json"
 
-# 1. DIRETÓRIO PADRÃO DE DOWNLOAD
-# Altere o caminho abaixo para onde deseja salvar os arquivos por padrão.
-DOWNLOAD_DIR="$HOME/Documents/Music/All/Downloads"
+# Defina sua API Key diretamente aqui ou via variável de ambiente GEMINI_API_KEY
+# Exemplo: client = genai.Client(api_key="SUA_CHAVE_AQUI")
+client = genai.Client()
 
-# Cria a pasta caso ela não exista
-mkdir -p "$DOWNLOAD_DIR"
+SYSTEM_PROMPT = """
+Você é um especialista em metadados de áudio e música brasileira (especialmente forró pé de serra e raridades).
+Sua tarefa é analisar uma lista de arquivos de áudio. Para cada item, você receberá o nome original do arquivo E as tags de metadados existentes (se houver).
 
-# 2. VERIFICAÇÃO DE ARGUMENTOS
-if [ -z "$1" ]; then
-    echo "Erro: Nenhuma URL fornecida!"
-    echo "Uso: ./baixar_playlist.sh <URL_DA_PLAYLIST>"
-    exit 1
-fi
+SUA MISSÃO:
+1. Use TANTO o nome do arquivo QUANTO as tags existentes para inferir o ARTISTA e o TÍTULO da música com a maior precisão possível.
+2. Limpe totalmente ruídos de títulos do YouTube/downloads (ex: '(Ao Vivo)', '[Official Video]', '(LP 1958)', '128kbps', 'HQ', etc.).
+3. Aplique Title Case adequado em português (ex: 'Luiz Gonzaga', 'Asa Branca').
+4. Se o artista for incerto, desconhecido ou muito ambíguo, defina "artist" ESTRITAMENTE como "Unknown".
+5. Mantenha o "title" sempre limpo, mesmo se o artista for "Unknown".
+6. Retorne ESTRITAMENTE um array JSON com os objetos no formato:
+   [{"original": "nome_do_arquivo.mp3", "artist": "Nome do Artista", "title": "Nome da Musica"}]
+"""
 
-PLAYLIST_URL="$1"
+RESPONSE_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "original": {"type": "STRING"},
+            "artist": {"type": "STRING"},
+            "title": {"type": "STRING"}
+        },
+        "required": ["original", "artist", "title"]
+    }
+}
 
-# 3. VERIFICAÇÃO DE DEPENDÊNCIAS (macOS)
-if ! command -v yt-dlp &> /dev/null; then
-    echo "Erro: yt-dlp não está instalado. Instale usando: brew install yt-dlp"
-    exit 1
-fi
 
-if ! command -v ffmpeg &> /dev/null; then
-    echo "Erro: ffmpeg não está instalado. Instale usando: brew install ffmpeg"
-    exit 1
-fi
+# ==========================================
+# GESTÃO DE HISTÓRICO LOCAL
+# ==========================================
+def carregar_historico(pasta_raiz):
+    """Carrega o conjunto de arquivos já processados no passado."""
+    caminho_historico = os.path.join(pasta_raiz, HISTORICO_FILE)
+    if os.path.exists(caminho_historico):
+        try:
+            with open(caminho_historico, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception as e:
+            print(f"Aviso: Não foi possível ler o histórico ({e}). Criando um novo.")
+    return set()
 
-# 4. EXECUÇÃO DO DOWNLOAD
-echo "Iniciando o download da playlist..."
-echo "Salvando em: $DOWNLOAD_DIR"
-echo "------------------------------------------------------------"
 
-# -x: extrai áudio
-# --audio-format mp3: converte para mp3
-# --audio-quality 0: VBR de melhor qualidade (equivalente a ~320kbps)
-# -P: especifica o diretório de saída mantendo o nome do vídeo padrão
-yt-dlp \
-  -x \
-  --audio-format mp3 \
-  --audio-quality 0 \
-  -P "$DOWNLOAD_DIR" \
-  "$PLAYLIST_URL"
+def salvar_historico(pasta_raiz, historico_set):
+    """Salva o histórico atualizado de arquivos processados."""
+    caminho_historico = os.path.join(pasta_raiz, HISTORICO_FILE)
+    try:
+        with open(caminho_historico, "w", encoding="utf-8") as f:
+            json.dump(list(historico_set), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Erro ao salvar arquivo de histórico: {e}")
 
-echo "------------------------------------------------------------"
-echo "Download concluído com sucesso!"
 
+# ==========================================
+# MANIPULAÇÃO DE METADADOS E ARQUIVOS
+# ==========================================
+def ler_tags_existentes(caminho_arquivo):
+    """Lê as tags ID3 atuais do arquivo para passar como contexto extra para a IA."""
+    tags = {}
+    try:
+        audio = MP3(caminho_arquivo, ID3=EasyID3)
+        tags["artist"] = audio.get("artist", [""])[0]
+        tags["title"] = audio.get("title", [""])[0]
+        tags["album"] = audio.get("album", [""])[0]
+    except Exception:
+        tags = {"artist": "", "title": "", "album": ""}
+    return tags
+
+
+def atualizar_tags_id3(caminho_arquivo, artista, titulo):
+    """Escreve os metadados finais de Artista e Título no MP3."""
+    try:
+        audio = MP3(caminho_arquivo, ID3=EasyID3)
+    except Exception:
+        audio = MP3(caminho_arquivo)
+        audio.add_tags()
+        audio = MP3(caminho_arquivo, ID3=EasyID3)
+
+    audio['artist'] = artista
+    audio['title'] = titulo
+    audio.save()
+
+
+def sanitizar_nome_arquivo(nome):
+    """Remove caracteres inválidos para o sistema operacional."""
+    return re.sub(r'[\\/*?:"<>|]', "", nome).strip()
+
+
+def renomear_arquivo_local(caminho_original, artista, titulo):
+    """Renomeia o arquivo mantendo a subpasta de origem intacta."""
+    pasta_atual = os.path.dirname(caminho_original)
+    _, extensao = os.path.splitext(caminho_original)
+
+    novo_nome_base = f"{artista} - {titulo}{extensao}"
+    novo_nome_limpo = sanitizar_nome_arquivo(novo_nome_base)
+    novo_caminho = os.path.join(pasta_atual, novo_nome_limpo)
+
+    # Evita colisões de arquivos com o mesmo nome dentro da mesma subpasta
+    contador = 1
+    while os.path.exists(novo_caminho) and novo_caminho != caminho_original:
+        nome_sem_ext, ext = os.path.splitext(novo_nome_limpo)
+        novo_caminho = os.path.join(pasta_atual, f"{nome_sem_ext} ({contador}){ext}")
+        contador += 1
+
+    if caminho_original != novo_caminho:
+        os.rename(caminho_original, novo_caminho)
+        return novo_caminho, os.path.basename(novo_caminho)
+    return caminho_original, os.path.basename(caminho_original)
+
+
+# ==========================================
+# REQUISIÇÕES GEMINI API (COM TRATAMENTO DE COTA)
+# ==========================================
+def processar_lote_ia(lote_dados, max_tentativas=4):
+    """Envia um lote para o Gemini 2.5 Flash tratando erros de cota (429 / Rate Limit)."""
+    prompt_usuario = "Analise os arquivos e metadados a seguir para extrair o artista e título corretos:\n"
+    prompt_usuario += json.dumps(lote_dados, ensure_ascii=False, indent=2)
+
+    for tentativa in range(max_tentativas):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=prompt_usuario,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                    response_schema=RESPONSE_SCHEMA,
+                    temperature=0.1
+                )
+            )
+            return json.loads(response.text)
+        except Exception as e:
+            erro_str = str(e)
+            if "429" in erro_str or "RESOURCE_EXHAUSTED" in erro_str or "Quota" in erro_str:
+                tempo_espera = (tentativa + 1) * 12  # Backoff progressivo: 12s, 24s, 36s...
+                print(f"   [Cota da API Atingida] Aguardando {tempo_espera}s para tentar novamente...")
+                time.sleep(tempo_espera)
+            else:
+                print(f"Erro ao processar lote na API do Gemini: {e}")
+                break
+
+    return []
+
+
+# ==========================================
+# ORQUESTRAÇÃO DA BIBLIOTECA
+# ==========================================
+def processar_biblioteca(pasta_raiz):
+    """Varre a pasta de forma recursiva e atualiza os arquivos localmente."""
+    pasta_raiz = os.path.expanduser(pasta_raiz)
+
+    if not os.path.exists(pasta_raiz):
+        print(f"[ERRO CRÍTICO] A pasta '{pasta_raiz}' não foi encontrada.")
+        return
+
+    print(f"Iniciando varredura recursiva em: {pasta_raiz}\n")
+
+    historico = carregar_historico(pasta_raiz)
+
+    # 1. Varredura e filtragem de arquivos com base no histórico
+    arquivos_para_processar = []
+    pulas = 0
+
+    for raiz, _, arquivos in os.walk(pasta_raiz):
+        for arquivo in arquivos:
+            if arquivo == HISTORICO_FILE:
+                continue
+
+            if arquivo.lower().endswith(EXTENSOES_SUPORTADAS):
+                caminho_completo = os.path.join(raiz, arquivo)
+
+                # Se já estiver registrado no histórico, ignora
+                if arquivo in historico:
+                    pulas += 1
+                    continue
+
+                tags_atuais = ler_tags_existentes(caminho_completo)
+                arquivos_para_processar.append({
+                    "original": arquivo,
+                    "caminho_completo": caminho_completo,
+                    "existing_tags": tags_atuais
+                })
+
+    total = len(arquivos_para_processar)
+    print(f"Músicas já processadas anteriormente (ignoradas): {pulas}")
+    print(f"Novas músicas a processar: {total}\n")
+
+    if total == 0:
+        print("Nenhuma nova música para processar!")
+        return
+
+    total_lotes = ((total - 1) // TAMANHO_LOTE) + 1
+
+    # 2. Processamento em Lotes (Batches)
+    for i in range(0, total, TAMANHO_LOTE):
+        fatia_lote = arquivos_para_processar[i:i + TAMANHO_LOTE]
+        numero_lote = (i // TAMANHO_LOTE) + 1
+
+        print(f"--> Processando lote {numero_lote} de {total_lotes} ({len(fatia_lote)} músicas)...")
+
+        payload_ia = [
+            {
+                "original": item["original"],
+                "existing_tags": item["existing_tags"]
+            }
+            for item in fatia_lote
+        ]
+
+        mapa_caminhos = {item["original"]: item["caminho_completo"] for item in fatia_lote}
+
+        resultados_json = processar_lote_ia(payload_ia)
+
+        # 3. Atualiza as tags ID3, renomeia o arquivo e grava no histórico
+        for item in resultados_json:
+            nome_original = item.get("original")
+            artista = item.get("artist", "Unknown").strip()
+            titulo = item.get("title", "Desconhecido").strip()
+
+            caminho_original = mapa_caminhos.get(nome_original)
+
+            if caminho_original and os.path.exists(caminho_original):
+                try:
+                    # Passo A: Atualiza Tag ID3 interna
+                    atualizar_tags_id3(caminho_original, artista, titulo)
+
+                    # Passo B: Renomeia mantendo na subpasta original
+                    novo_caminho, novo_nome = renomear_arquivo_local(caminho_original, artista, titulo)
+
+                    # Passo C: Adiciona tanto o nome antigo quanto o novo ao histórico
+                    historico.add(nome_original)
+                    historico.add(novo_nome)
+
+                    print(f" [OK] {nome_original}\n   └─► {novo_nome}")
+                except Exception as e:
+                    print(f" [ERRO] Falha ao processar {nome_original}: {e}")
+
+        # Salva o arquivo JSON de histórico após cada lote concluído
+        salvar_historico(pasta_raiz, historico)
+
+        # Pausa de 3 segundos entre lotes para evitar estourar limites de requisição por minuto
+        time.sleep(3)
+
+    print("\nProcessamento concluído com sucesso!")
+
+
+# ==========================================
+# EXECUÇÃO DO SCRIPT
+# ==========================================
+if __name__ == "__main__":
+    # Ajuste o caminho da sua pasta raiz (o expanduser trata o '~' no macOS)
+    PASTA_MINHAS_MUSICAS = "~/Documents/Music/Test"
+
+    processar_biblioteca(PASTA_MINHAS_MUSICAS)
