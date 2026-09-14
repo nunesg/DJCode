@@ -1,4 +1,9 @@
 import os
+# Silencia o aviso de deprecation do Tk no macOS antes de importar o tkinter
+os.environ["TK_SILENCE_DEPRECATION"] = "1"
+import tkinter as tk
+
+from tkinter import filedialog
 import re
 import json
 import time
@@ -279,13 +284,45 @@ def processar_biblioteca(pasta_raiz):
 
     print("\nProcessamento concluído com sucesso!")
 
+def selecionar_pasta():
+    # Printa instrução clara no terminal ANTES de invocar a janela
+    print("\n[AÇÃO NECESSÁRIA] Uma janela de seleção de pasta foi aberta.")
+    print("Caso não veja a janela na tela, confira o ícone do Python no seu dock/barra de tarefas.\n")
+    
+    root = tk.Tk()
+    root.withdraw()  # Esconde a janela principal em branco
+    
+    # Força a janela do Tkinter a ir para o topo absoluto das janelas
+    root.attributes('-topmost', True)
+    root.update()
+    
+    # Truque específico para macOS/Linux trazer o aplicativo Python para o primeiro plano
+    try:
+        root.lift()
+        root.focus_force()
+    except Exception:
+        pass
+
+    caminho_pasta = filedialog.askdirectory(
+        title="Selecione a pasta com sua biblioteca de músicas"
+    )
+    
+    root.destroy()  # Destrói a instância oculta do Tkinter após a escolha
+    return caminho_pasta
 
 # ==========================================
 # EXECUÇÃO DO SCRIPT
 # ==========================================
 if __name__ == "__main__":
+    pasta_selecionada = selecionar_pasta()
+    
+    if pasta_selecionada:
+        print(f"Pasta selecionada: {pasta_selecionada}")
+        processar_biblioteca(pasta_selecionada)
+    else:
+        print("Nenhuma pasta foi selecionada. Operação cancelada.")
     # Ajuste o caminho da sua pasta raiz (o expanduser trata o '~' no macOS)
-    PASTA_MINHAS_MUSICAS = "~/Documents/Music/Test"
-    pasta_raiz = os.path.expanduser(PASTA_MINHAS_MUSICAS)
+    # PASTA_MINHAS_MUSICAS = "~/Documents/Music/Test"
+    # pasta_raiz = os.path.expanduser(PASTA_MINHAS_MUSICAS)
 
-    processar_biblioteca(pasta_raiz)
+    # processar_biblioteca(pasta_raiz)
