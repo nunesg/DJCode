@@ -321,8 +321,3 @@ if __name__ == "__main__":
         processar_biblioteca(pasta_selecionada)
     else:
         print("Nenhuma pasta foi selecionada. Operação cancelada.")
-    # Ajuste o caminho da sua pasta raiz (o expanduser trata o '~' no macOS)
-    # PASTA_MINHAS_MUSICAS = "~/Documents/Music/Test"
-    # pasta_raiz = os.path.expanduser(PASTA_MINHAS_MUSICAS)
-
-    # processar_biblioteca(pasta_raiz)
