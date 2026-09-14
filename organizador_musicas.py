@@ -11,6 +11,13 @@ from google import genai
 from google.genai import types
 from mutagen.easyid3 import EasyID3
 from mutagen.mp3 import MP3
+from dotenv import load_dotenv
+
+# Carrega as variáveis do arquivo .env
+load_dotenv()
+
+# Recupera a chave
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # ==========================================
 # CONFIGURAÇÕES
@@ -164,6 +171,43 @@ def renomear_arquivo_local(caminho_original, artista, titulo):
         os.rename(caminho_original, novo_caminho)
         return novo_caminho, os.path.basename(novo_caminho)
     return caminho_original, os.path.basename(caminho_original)
+
+from openai import OpenAI
+
+# Instancia o cliente apontando para o servidor do Groq
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=GROQ_API_KEY
+)
+
+def processar_lote_groq(lote_dados):
+    prompt_usuario = "Analise o lote de arquivos e metadados a seguir para extrair/inferir o artista e título corretos:\n"
+    prompt_usuario += json.dumps(lote_dados, ensure_ascii=False, indent=2)
+
+    try:
+        response = client.chat.completions.create(
+            model="qwen/qwen3.8-27b", 
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt_usuario}
+            ],
+            response_format={"type": "json_object"},  # Garante estrutura JSON nativa
+            temperature=0.1
+        )
+
+        conteudo = response.choices[0].message.content
+        dados = json.loads(conteudo)
+
+        # Trata desempacotamento de chaves internas se houver
+        if isinstance(dados, dict):
+            for valor in dados.values():
+                if isinstance(valor, list):
+                    return valor
+        return dados if isinstance(dados, list) else []
+
+    except Exception as e:
+        print(f"Erro ao processar na API do Groq: {e}")
+        return []
 
 
 import urllib.request
@@ -334,7 +378,7 @@ def processar_biblioteca(pasta_raiz, tam_lote = TAMANHO_LOTE):
 
         mapa_caminhos = {item["original"]: item["caminho_completo"] for item in fatia_lote}
 
-        resultados_json = processar_lote_ollama(payload_ia)
+        resultados_json = processar_lote_groq(payload_ia)
 
         # 3. Atualiza as tags ID3, renomeia o arquivo e grava no histórico
         for item in resultados_json:
