@@ -52,6 +52,21 @@ SUA MISSÃO E REGRAS:
 4. FORMATO DE SAÍDA:
    - Retorne ESTRITAMENTE um array JSON com os objetos no formato:
      [{"original": "nome_do_arquivo.mp3", "artist": "Nome do Artista", "title": "Nome da Musica"}]
+   - Siga o schema de resposta como abaixo: 
+   
+   RESPONSE_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "original": {"type": "STRING"},
+            "artist": {"type": "STRING"},
+            "title": {"type": "STRING"}
+        },
+        "required": ["original", "artist", "title"]
+    }
+}
+
 """
 
 RESPONSE_SCHEMA = {
@@ -151,10 +166,79 @@ def renomear_arquivo_local(caminho_original, artista, titulo):
     return caminho_original, os.path.basename(caminho_original)
 
 
+import urllib.request
+
+MODELO_OLLAMA = "qwen2.5:7b"
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+def processar_lote_ollama(lote_dados):
+    """Envia o lote para o Ollama local e desserializa o JSON com segurança."""
+    prompt_usuario = "Analise o lote de arquivos e metadados a seguir para extrair/inferir o artista e título corretos:\n"
+    prompt_usuario += json.dumps(lote_dados, ensure_ascii=False, indent=2)
+
+    payload = {
+        "model": MODELO_OLLAMA,
+        "prompt": prompt_usuario,
+        "system": SYSTEM_PROMPT,
+        "format": "json",
+        "stream": True,
+        "options": {
+            "temperature": 0.1
+        }
+    }
+
+    req = urllib.request.Request(
+        OLLAMA_URL,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'}
+    )
+
+    texto_acumulado = ""
+    print("\n--- [OLLAMA PROCESSANDO LOTE] ---")
+
+    try:
+        with urllib.request.urlopen(req) as response:
+            for line in response:
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    texto_chunk = chunk.get("response", "")
+                    print(texto_chunk, end="", flush=True)
+                    texto_acumulado += texto_chunk
+
+        print("\n---------------------------------\n")
+
+        # 1. Limpa possíveis marcações de bloco de código markdown
+        texto_limpo = re.sub(r'^```json\s*|```$', '', texto_acumulado.strip(), flags=re.MULTILINE)
+
+        # 2. Primeira passagem do parser JSON
+        dados = json.loads(texto_limpo)
+
+        # 3. Se a IA retornou uma string contendo JSON (Double Encoded JSON)
+        if isinstance(dados, str):
+            dados = json.loads(dados)
+
+        # 4. Se a IA envelopou o array dentro de um objeto (ex: {"items": [...]} ou {"musicas": [...]})
+        if isinstance(dados, dict):
+            for valor in dados.values():
+                if isinstance(valor, list):
+                    dados = valor
+                    break
+
+        # 5. Valida se o resultado final é de fato uma lista
+        if isinstance(dados, list):
+            return dados
+        else:
+            print("[AVISO] A resposta do Ollama não veio em formato de lista.")
+            return []
+
+    except Exception as e:
+        print(f"\n[ERRO DE PARSER] Falha ao desserializar resposta do Ollama: {e}")
+        return []
+
 # ==========================================
 # REQUISIÇÕES GEMINI API (COM TRATAMENTO DE COTA)
 # ==========================================
-def processar_lote_ia(lote_dados, max_tentativas=4):
+def processar_lote_gemini(lote_dados, max_tentativas=4):
     """Envia um lote para o Gemini 2.5 Flash tratando erros de cota (429 / Rate Limit)."""
     prompt_usuario = "Analise os arquivos e metadados a seguir para extrair o artista e título corretos:\n"
     prompt_usuario += json.dumps(lote_dados, ensure_ascii=False, indent=2)
@@ -188,7 +272,7 @@ def processar_lote_ia(lote_dados, max_tentativas=4):
 # ==========================================
 # ORQUESTRAÇÃO DA BIBLIOTECA
 # ==========================================
-def processar_biblioteca(pasta_raiz):
+def processar_biblioteca(pasta_raiz, tam_lote = TAMANHO_LOTE):
     """Varre a pasta de forma recursiva e atualiza os arquivos localmente."""
 
     if not os.path.exists(pasta_raiz):
@@ -231,12 +315,12 @@ def processar_biblioteca(pasta_raiz):
         print("Nenhuma nova música para processar!")
         return
 
-    total_lotes = ((total - 1) // TAMANHO_LOTE) + 1
+    total_lotes = ((total - 1) // tam_lote) + 1
 
     # 2. Processamento em Lotes (Batches)
-    for i in range(0, total, TAMANHO_LOTE):
-        fatia_lote = arquivos_para_processar[i:i + TAMANHO_LOTE]
-        numero_lote = (i // TAMANHO_LOTE) + 1
+    for i in range(0, total, tam_lote):
+        fatia_lote = arquivos_para_processar[i:i + tam_lote]
+        numero_lote = (i // tam_lote) + 1
 
         print(f"--> Processando lote {numero_lote} de {total_lotes} ({len(fatia_lote)} músicas)...")
 
@@ -250,7 +334,7 @@ def processar_biblioteca(pasta_raiz):
 
         mapa_caminhos = {item["original"]: item["caminho_completo"] for item in fatia_lote}
 
-        resultados_json = processar_lote_ia(payload_ia)
+        resultados_json = processar_lote_ollama(payload_ia)
 
         # 3. Atualiza as tags ID3, renomeia o arquivo e grava no histórico
         for item in resultados_json:
@@ -318,6 +402,6 @@ if __name__ == "__main__":
     
     if pasta_selecionada:
         print(f"Pasta selecionada: {pasta_selecionada}")
-        processar_biblioteca(pasta_selecionada)
+        processar_biblioteca(pasta_selecionada, 5)
     else:
         print("Nenhuma pasta foi selecionada. Operação cancelada.")
