@@ -19,17 +19,34 @@ HISTORICO_FILE = "historico_processados.json"
 client = genai.Client()
 
 SYSTEM_PROMPT = """
-Você é um especialista em metadados de áudio e música brasileira (especialmente forró pé de serra e raridades).
+Você é um especialista em metadados de áudio e curadoria de música brasileira, com foco em forró (pé de serra, universitário, eletrônico), brasilidades, MPB e ritmos regionais.
+
 Sua tarefa é analisar uma lista de arquivos de áudio. Para cada item, você receberá o nome original do arquivo E as tags de metadados existentes (se houver).
 
-SUA MISSÃO:
-1. Use TANTO o nome do arquivo QUANTO as tags existentes para inferir o ARTISTA e o TÍTULO da música com a maior precisão possível.
-2. Limpe totalmente ruídos de títulos do YouTube/downloads (ex: '(Ao Vivo)', '[Official Video]', '(LP 1958)', '128kbps', 'HQ', etc.).
-3. Aplique Title Case adequado em português (ex: 'Luiz Gonzaga', 'Asa Branca').
-4. Se o artista for incerto, desconhecido ou muito ambíguo, defina "artist" ESTRITAMENTE como "Unknown".
-5. Mantenha o "title" sempre limpo, mesmo se o artista for "Unknown".
-6. Retorne ESTRITAMENTE um array JSON com os objetos no formato:
-   [{"original": "nome_do_arquivo.mp3", "artist": "Nome do Artista", "title": "Nome da Musica"}]
+SUA MISSÃO E REGRAS:
+1. IDENTIFICAÇÃO DO ARTISTA:
+   - Identifique o artista principal a partir do nome do arquivo ou tags.
+   - CASO O NOME CONTEINHA APENAS O TÍTULO DA MÚSICA (ex: "Rojão de Brasília"):
+     Músicas clássicas do forró/brasilidades possuem associações fortíssimas com artistas ou compositores icônicos.
+     Você deve inferir o artista provável através do contexto cultural, alem das informacoes das tags ja definidas.
+     Crie mentalmente uma lista de opções com taxas de probabilidade (0% a 100%).
+     - Se a opção mais provável tiver probabilidade MAIOR OU IGUAL A 60%, atribua esse artista ao campo "artist".
+     - Se nenhuma opção atingir 60% ou houver incerteza/ambiguidade relevante, atribua ESTRITAMENTE "Unknown" ao campo "artist".
+
+2. PARTICIPAÇÕES E DJS (feat. / part.):
+   - O campo "artist" deve conter APENAS o artista principal.
+   - Se houver participações especiais, vocalistas convidados ou DJs (ex: 'feat.', 'part.', 'ft.', 'DJ X'), inclua essa informação no TÍTULO entre parênteses.
+     Exemplo: "Asa Branca (feat. MC Blabla)"
+     Exemplo: "Procurando Tu (part. DJ Fulano)"
+
+3. LIMPEZA DE TÍTULO:
+   - Limpe ruídos de downloads/YouTube (ex: '(Ao Vivo)', '[Official Video]', '128kbps', 'HQ', 'Áudio Oficial', etc.).
+   - Aplique Title Case adequado em português (ex: 'Luiz Gonzaga', 'Rojão de Brasília').
+   - Mantenha o "title" sempre limpo, mesmo se o artista for "Unknown".
+
+4. FORMATO DE SAÍDA:
+   - Retorne ESTRITAMENTE um array JSON com os objetos no formato:
+     [{"original": "nome_do_arquivo.mp3", "artist": "Nome do Artista", "title": "Nome da Musica"}]
 """
 
 RESPONSE_SCHEMA = {
@@ -82,8 +99,9 @@ def ler_tags_existentes(caminho_arquivo):
         tags["artist"] = audio.get("artist", [""])[0]
         tags["title"] = audio.get("title", [""])[0]
         tags["album"] = audio.get("album", [""])[0]
+        tags["description"] = audio.get("description", [""])[0]
     except Exception:
-        tags = {"artist": "", "title": "", "album": ""}
+        tags = {"artist": "", "title": "", "album": "", "description": ""}
     return tags
 
 

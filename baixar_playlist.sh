@@ -4,23 +4,42 @@
 # Script de Download de Playlists do YouTube (Áudio MP3 - Alta Qualidade)
 # ==============================================================================
 
-# 1. DIRETÓRIO PADRÃO DE DOWNLOAD
-# Altere o caminho abaixo para onde deseja salvar os arquivos por padrão.
-DOWNLOAD_DIR="$HOME/Documents/Music/All/Downloads"
+# 1. DIRETÓRIOS PADRÃO E DE TESTE
+DEFAULT_DIR="$HOME/Documents/Music/Downloads"
+TEST_DIR="$HOME/Documents/Music/Test/Downloads"
 
-# Cria a pasta caso ela não exista
-mkdir -p "$DOWNLOAD_DIR"
+# Diretório inicial (padrão)
+DOWNLOAD_DIR="$DEFAULT_DIR"
 
-# 2. VERIFICAÇÃO DE ARGUMENTOS
-if [ -z "$1" ]; then
+# 2. TRATAMENTO DE ARGUMENTOS/FLAGS
+PLAYLIST_URL=""
+
+for arg in "$@"; do
+    case $arg in
+        --test|-t)
+            DOWNLOAD_DIR="$TEST_DIR"
+            shift
+            ;;
+        *)
+            # Assume que o argumento sem flag é a URL
+            if [ -z "$PLAYLIST_URL" ]; then
+                PLAYLIST_URL="$arg"
+            fi
+            ;;
+    esac
+done
+
+# Verifica se a URL foi fornecida
+if [ -z "$PLAYLIST_URL" ]; then
     echo "Erro: Nenhuma URL fornecida!"
-    echo "Uso: ./baixar_playlist.sh <URL_DA_PLAYLIST>"
+    echo "Uso: $0 [--test] <URL_DA_PLAYLIST>"
     exit 1
 fi
 
-PLAYLIST_URL="$1"
+# Cria a pasta de destino caso ela não exista
+mkdir -p "$DOWNLOAD_DIR"
 
-# 3. VERIFICAÇÃO DE DEPENDÊNCIAS (macOS)
+# 3. VERIFICAÇÃO DE DEPENDÊNCIAS
 if ! command -v yt-dlp &> /dev/null; then
     echo "Erro: yt-dlp não está instalado. Instale usando: brew install yt-dlp"
     exit 1
@@ -32,21 +51,19 @@ if ! command -v ffmpeg &> /dev/null; then
 fi
 
 # 4. EXECUÇÃO DO DOWNLOAD
-echo "Iniciando o download da playlist..."
-echo "Salvando em: $DOWNLOAD_DIR"
+echo "Iniciando o download..."
+echo "Diretório de destino: $DOWNLOAD_DIR"
 echo "------------------------------------------------------------"
 
-# -x: extrai áudio
-# --audio-format mp3: converte para mp3
-# --audio-quality 0: VBR de melhor qualidade (equivalente a ~320kbps)
-# -P: especifica o diretório de saída mantendo o nome do vídeo padrão
 yt-dlp \
   -x \
   --audio-format mp3 \
   --audio-quality 0 \
+  --add-metadata \
+  --embed-thumbnail \
+  --extractor-args "youtube:player_client=mweb,web" \
   -P "$DOWNLOAD_DIR" \
   "$PLAYLIST_URL"
 
 echo "------------------------------------------------------------"
 echo "Download concluído com sucesso!"
-
