@@ -167,7 +167,6 @@ def processar_lote_ia(lote_dados, max_tentativas=4):
 # ==========================================
 def processar_biblioteca(pasta_raiz):
     """Varre a pasta de forma recursiva e atualiza os arquivos localmente."""
-    pasta_raiz = os.path.expanduser(pasta_raiz)
 
     if not os.path.exists(pasta_raiz):
         print(f"[ERRO CRÍTICO] A pasta '{pasta_raiz}' não foi encontrada.")
@@ -269,5 +268,6 @@ def processar_biblioteca(pasta_raiz):
 if __name__ == "__main__":
     # Ajuste o caminho da sua pasta raiz (o expanduser trata o '~' no macOS)
     PASTA_MINHAS_MUSICAS = "~/Documents/Music/Test"
+    pasta_raiz = os.path.expanduser(PASTA_MINHAS_MUSICAS)
 
-    processar_biblioteca(PASTA_MINHAS_MUSICAS)
+    processar_biblioteca(pasta_raiz)
