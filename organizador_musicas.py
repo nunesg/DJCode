@@ -7,6 +7,7 @@ from tkinter import filedialog
 import re
 import json
 import time
+import unicodedata
 from google import genai
 from google.genai import types
 from mutagen.easyid3 import EasyID3
@@ -37,8 +38,8 @@ Sua tarefa é analisar uma lista de arquivos de áudio. Para cada item, você re
 
 SUA MISSÃO E REGRAS:
 1. IDENTIFICAÇÃO DO ARTISTA:
-   - Identifique o artista principal a partir do nome do arquivo ou tags.
-   - CASO O NOME CONTEINHA APENAS O TÍTULO DA MÚSICA (ex: "Rojão de Brasília"):
+   - Identifique o artista principal a partir do nome do arquivo ou tags. IGNORE caso o 'artista' no titulo ou nas tags providas seja Unknown
+   - CASO O NOME CONTEINHA APENAS O TÍTULO DA MÚSICA (ex: "Rojão de Brasília"), OU nao seja claro atraves das informacoes providas:
      Músicas clássicas do forró/brasilidades possuem associações fortíssimas com artistas ou compositores icônicos.
      Você deve inferir o artista provável através do contexto cultural, alem das informacoes das tags ja definidas.
      Crie mentalmente uma lista de opções com taxas de probabilidade (0% a 100%).
@@ -59,6 +60,7 @@ SUA MISSÃO E REGRAS:
 4. FORMATO DE SAÍDA:
    - Retorne ESTRITAMENTE um array JSON com os objetos no formato:
      [{"original": "nome_do_arquivo.mp3", "artist": "Nome do Artista", "title": "Nome da Musica"}]
+   - O campo 'original' deve usar ESTRITAMENTE os mesmo caracteres que o original 
    - Siga o schema de resposta como abaixo: 
    
    RESPONSE_SCHEMA = {
@@ -175,7 +177,7 @@ def renomear_arquivo_local(caminho_original, artista, titulo):
 from openai import OpenAI
 
 # Instancia o cliente apontando para o servidor do Groq
-client = OpenAI(
+clientOpenAi = OpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=GROQ_API_KEY
 )
@@ -185,7 +187,7 @@ def processar_lote_groq(lote_dados):
     prompt_usuario += json.dumps(lote_dados, ensure_ascii=False, indent=2)
 
     try:
-        response = client.chat.completions.create(
+        response = clientOpenAi.chat.completions.create(
             model="qwen/qwen3.8-27b", 
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -312,6 +314,11 @@ def processar_lote_gemini(lote_dados, max_tentativas=4):
 
     return []
 
+def normalizar(texto):
+    if not texto:
+        return ""
+    # Converte qualquer variação de acento NFD para NFC e coloca em minúsculas
+    return unicodedata.normalize("NFC", texto).strip().lower()
 
 # ==========================================
 # ORQUESTRAÇÃO DA BIBLIOTECA
@@ -375,9 +382,10 @@ def processar_biblioteca(pasta_raiz, tam_lote = TAMANHO_LOTE):
             }
             for item in fatia_lote
         ]
-
-        mapa_caminhos = {item["original"]: item["caminho_completo"] for item in fatia_lote}
-
+        mapa_caminhos = {
+            normalizar(item["original"]): item["caminho_completo"] 
+            for item in fatia_lote
+        }
         resultados_json = processar_lote_groq(payload_ia)
 
         # 3. Atualiza as tags ID3, renomeia o arquivo e grava no histórico
@@ -386,7 +394,7 @@ def processar_biblioteca(pasta_raiz, tam_lote = TAMANHO_LOTE):
             artista = item.get("artist", "Unknown").strip()
             titulo = item.get("title", "Desconhecido").strip()
 
-            caminho_original = mapa_caminhos.get(nome_original)
+            caminho_original = mapa_caminhos.get(normalizar(nome_original))
 
             if caminho_original and os.path.exists(caminho_original):
                 try:
