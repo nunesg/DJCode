@@ -148,31 +148,71 @@ def atualizar_tags_id3(caminho_arquivo, artista, titulo):
     audio.save()
 
 
+def normalizar(texto):
+    if not texto:
+        return ""
+    texto_nfd = unicodedata.normalize("NFD", texto)
+    texto_sem_acento = "".join(
+        c for c in texto_nfd if unicodedata.category(c) != "Mn"
+    )
+    return (
+        unicodedata.normalize("NFC", texto_sem_acento)
+        .encode("ascii", "ignore")
+        .decode("utf-8")
+        .strip()
+        .lower()
+    )
+
+
 def sanitizar_nome_arquivo(nome):
-    """Remove caracteres inválidos para o sistema operacional."""
-    return re.sub(r'[\\/*?:"<>|]', "", nome).strip()
+    """Remove caracteres inválidos do SO e limpa espaços duplos."""
+    nome = re.sub(r'[\\/*?:"<>|]', "", nome)
+    return re.sub(r"\s+", " ", nome).strip()
+
+
+def criar_novo_nome(artist, name):
+    if artist and artist.strip().lower() != "unknown":
+        return f"{artist} - {name}"
+    return name
 
 
 def renomear_arquivo_local(caminho_original, artista, titulo):
-    """Renomeia o arquivo mantendo a subpasta de origem intacta."""
     pasta_atual = os.path.dirname(caminho_original)
     _, extensao = os.path.splitext(caminho_original)
 
-    novo_nome_base = f"{artista} - {titulo}{extensao}"
-    novo_nome_limpo = sanitizar_nome_arquivo(novo_nome_base)
+    # 1. Gera o novo nome de exibição (preservando formato limpo)
+    base_nome = criar_novo_nome(artista, titulo)
+    novo_nome_limpo = f"{sanitizar_nome_arquivo(base_nome)}{extensao}"
     novo_caminho = os.path.join(pasta_atual, novo_nome_limpo)
 
-    # Evita colisões de arquivos com o mesmo nome dentro da mesma subpasta
+    # 2. Compara de forma insensível a acentos/caixa usando a função normalizar()
+    # Se o arquivo de destino é O MESMO arquivo original (só mudando caixa/acentos), não adicione (1)
+    if normalizar(os.path.abspath(caminho_original)) == normalizar(
+        os.path.abspath(novo_caminho)
+    ):
+        if caminho_original != novo_caminho:
+            os.rename(caminho_original, novo_caminho)
+        return novo_caminho, os.path.basename(novo_caminho)
+
+    # 3. Tratamento de colisão REAL (quando outro arquivo diferente já ocupa o nome)
     contador = 1
-    while os.path.exists(novo_caminho) and novo_caminho != caminho_original:
-        nome_sem_ext, ext = os.path.splitext(novo_nome_limpo)
-        novo_caminho = os.path.join(pasta_atual, f"{nome_sem_ext} ({contador}){ext}")
+    nome_sem_ext, ext = os.path.splitext(novo_nome_limpo)
+
+    while os.path.exists(novo_caminho):
+        # Normaliza ambos para verificar se a colisão no disco é com o próprio arquivo que estamos renomeando
+        if normalizar(os.path.abspath(novo_caminho)) == normalizar(
+            os.path.abspath(caminho_original)
+        ):
+            break
+
+        novo_nome_com_index = f"{nome_sem_ext} ({contador}){ext}"
+        novo_caminho = os.path.join(pasta_atual, novo_nome_com_index)
         contador += 1
 
     if caminho_original != novo_caminho:
         os.rename(caminho_original, novo_caminho)
-        return novo_caminho, os.path.basename(novo_caminho)
-    return caminho_original, os.path.basename(caminho_original)
+
+    return novo_caminho, os.path.basename(novo_caminho)
 
 from openai import OpenAI
 
@@ -313,12 +353,6 @@ def processar_lote_gemini(lote_dados, max_tentativas=4):
                 break
 
     return []
-
-def normalizar(texto):
-    if not texto:
-        return ""
-    # Converte qualquer variação de acento NFD para NFC e coloca em minúsculas
-    return unicodedata.normalize("NFC", texto).strip().lower()
 
 # ==========================================
 # ORQUESTRAÇÃO DA BIBLIOTECA
