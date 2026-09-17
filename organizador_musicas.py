@@ -101,7 +101,7 @@ def carregar_historico(pasta_raiz):
     if os.path.exists(caminho_historico):
         try:
             with open(caminho_historico, "r", encoding="utf-8") as f:
-                return set(json.load(f))
+                return sorted(set(json.load(f)))
         except Exception as e:
             print(f"Aviso: Não foi possível ler o histórico ({e}). Criando um novo.")
     return set()
@@ -112,7 +112,7 @@ def salvar_historico(pasta_raiz, historico_set):
     caminho_historico = os.path.join(pasta_raiz, HISTORICO_FILE)
     try:
         with open(caminho_historico, "w", encoding="utf-8") as f:
-            json.dump(list(historico_set), f, ensure_ascii=False, indent=2)
+            json.dump(list(sorted(historico_set)), f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"Erro ao salvar arquivo de histórico: {e}")
 
