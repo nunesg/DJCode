@@ -377,6 +377,10 @@ def processar_biblioteca(pasta_raiz, tam_lote = TAMANHO_LOTE):
             if arquivo == HISTORICO_FILE:
                 continue
 
+            # Ignora arquivos de metadados do macOS ou arquivos ocultos
+            if arquivo.startswith("._") or arquivo.startswith("."):
+                continue
+
             if arquivo.lower().endswith(EXTENSOES_SUPORTADAS):
                 caminho_completo = os.path.join(raiz, arquivo)
 
@@ -420,7 +424,7 @@ def processar_biblioteca(pasta_raiz, tam_lote = TAMANHO_LOTE):
             normalizar(item["original"]): item["caminho_completo"] 
             for item in fatia_lote
         }
-        resultados_json = processar_lote_groq(payload_ia)
+        resultados_json = processar_lote_ollama(payload_ia)
 
         # 3. Atualiza as tags ID3, renomeia o arquivo e grava no histórico
         for item in resultados_json:
